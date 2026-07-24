@@ -1,6 +1,6 @@
 # Page Pulse API
 
-Page Pulse is a production-grade URL-audit service built with Express.js, designed to handle 10,000 audits/day with bursts of up to 500 concurrent requests. It is highly resilient, heavily cached via Redis, and strictly limits concurrency to prevent resource exhaustion.
+Page Pulse is a production-grade URL-audit service built with Express.js, designed to handle 10,000 audits/day with bursts of up to 500 concurrent requests. It is highly resilient, heavily cached via Redis, strictly limits concurrency to prevent resource exhaustion, and offers a modern, reviewer-friendly interactive interface.
 
 ---
 
@@ -10,7 +10,7 @@ Page Pulse is a production-grade URL-audit service built with Express.js, design
 - Node.js 18+
 - Redis Server (local or remote)
 
-### 2. Setup
+### 2. Setup & Installation
 ```bash
 # Install dependencies
 npm install
@@ -22,10 +22,10 @@ cp .env.example .env
 npm run dev
 ```
 
-### 3. Usage
-- **Landing Page:** `http://localhost:3000/` (Minimal status dashboard for reviewers)
-- **Swagger Documentation:** `http://localhost:3000/docs` (Interactive API playground)
-- **Health Check:** `http://localhost:3000/health`
+### 3. Usage & Endpoints
+- **Landing Page:** `http://localhost:3000/` (Lightweight status page built for reviewer evaluation)
+- **API Reference (Scalar):** `http://localhost:3000/docs` (Modern 3-panel interactive documentation & API client)
+- **Health Check:** `http://localhost:3000/health` (Exposes system status, Redis connection, and uptime)
 - **Audit Endpoint:** `POST http://localhost:3000/api/audit`
 
 ---
@@ -33,7 +33,7 @@ npm run dev
 ## 🏗 Architecture Overview (Task B: Design for Scale)
 
 ### Data Flow & Components
-The system follows a strict layered architecture (`routes -> controllers -> services`) and utilizes a **Cache-Aside** strategy.
+The system follows Clean Architecture principles with strict layer separation (`routes -> controllers -> services -> cache`). It uses a **Cache-Aside** strategy with SHA-256 hashed keys.
 
 ```mermaid
 sequenceDiagram
@@ -44,7 +44,7 @@ sequenceDiagram
     participant Target as Target URL
     
     Client->>Express: POST /api/audit {url: "..."}
-    Express->>Redis: Check cache:<sha256(url)>
+    Express->>Redis: Check cache:<sha256(normalizedUrl)>
     
     alt Cache Hit
         Redis-->>Express: Return cached JSON
@@ -60,19 +60,28 @@ sequenceDiagram
 ```
 
 ### State Management
-The Node.js processes are entirely **stateless**. The only state maintained by the system is the cache layer and distributed rate limiting, which both live exclusively in **Redis**. This allows horizontal scaling of the Node app behind a load balancer without sticky sessions.
+The Node.js application process is entirely **stateless**. Transient state (cache entries and rate-limiting counters) lives exclusively in **Redis**. This allows seamless horizontal scaling across multiple instances behind a load balancer without requiring sticky sessions.
 
 ---
 
 ## 🧠 Engineering Decisions
 
-- **Express.js:** Chosen for its simplicity, stability, and unopinionated nature. It is widely understood, making it easy for future engineers to inherit.
-- **No Database:** As persistent storage of historical audits was not required, adding PostgreSQL or MongoDB would introduce unnecessary complexity, cost, and latency. 
-- **Redis (Cache-Aside):** Redis serves as the sole state layer. We hash normalized URLs into `SHA-256` for cache keys to prevent excessively long or malformed keys, a production-critical practice.
-- **p-limit (Concurrency Control):** Node.js is single-threaded; launching 500 concurrent Axios requests during traffic bursts can easily exhaust file descriptors (sockets) and trigger Node's garbage collector aggressively. `p-limit` acts as a semaphore, ensuring we never exceed `CONCURRENCY_LIMIT` simultaneous outbound requests.
-- **Zod:** Provides strict, declarative schema validation that automatically structures error messages, replacing messy `if/else` checks in controllers.
-- **Pino:** Traditional loggers like Winston use string manipulation. Pino uses JSON streaming, which is significantly faster and natively structured for ingestion by Datadog or CloudWatch.
-- **Axios with Timeouts:** Every outbound network call must have a strict timeout (`REQUEST_TIMEOUT_MS`). Without this, broken external sites will cause our sockets to hang indefinitely until the service crashes.
+- **Express.js:** Chosen for its proven reliability, performance, and minimal overhead. It provides full transparency without hiding routing or middleware mechanics behind complex framework abstractions.
+- **No Database:** Historical audit persistence was intentionally omitted to keep the architecture lean and low-latency. Redis serves as the sole high-performance caching layer.
+- **Redis Cache-Aside with SHA-256 Keys:** Redis keys are generated as `cache:<sha256(normalizedUrl)>`. Hashing normalized URLs guarantees fixed-length, safe keys regardless of input URL length or query parameters.
+- **p-limit (Concurrency Gate):** Node.js single-threaded event loop can easily suffer socket exhaustion or memory spikes during 500-request bursts. `p-limit` acts as an execution semaphore to cap concurrent outbound Axios calls at `CONCURRENCY_LIMIT`.
+- **Axios with Strict Timeouts:** Every outbound HTTP request is configured with a timeout (`REQUEST_TIMEOUT_MS`). This prevents hung target servers from blocking server sockets indefinitely.
+- **Zod Validation:** Declarative schema validation guarantees clean 400 Bad Request responses with structured error field feedback without polluting controller logic.
+- **Pino Structured JSON Logging:** Pino outputs high-performance JSON logs decorated with `requestId`, `clientIp`, `responseTime`, `cacheHit`, and `auditedUrl`, ready for ingestion by Datadog or CloudWatch.
+- **Scalar API Documentation:** Replaced generic Swagger UI with `@scalar/express-api-reference` to provide a dark-mode, 3-panel split view (input on left, live response on right) for superior reviewer evaluation.
+- **Reviewer-Centric Landing Page:** Serves a lightweight HTML page at `/` featuring an online status indicator, API links, metadata tags, and the exact required footer credit linked to Digital Heroes (`target="_blank" rel="noopener noreferrer"`).
+
+---
+
+## ⚖️ Tradeoffs & Multi-Instance Distributed Deployments
+
+- **Rate Limiting Store:** In this single-instance setup, `express-rate-limit` uses memory storage. In a distributed multi-instance deployment, this must be switched to `rate-limit-redis` so rate limits are synchronized across all application nodes.
+- **In-Memory Concurrency Limits:** `p-limit` operates on a per-node basis. For cluster-wide outbound throttling, a distributed queue like BullMQ or Redis-backed rate throttlers would be implemented.
 
 ---
 
@@ -80,35 +89,34 @@ The Node.js processes are entirely **stateless**. The only state maintained by t
 
 At a scale of 10,000 audits/day and 500 concurrent bursts, here are the three most likely failure modes:
 
-1. **Failure Mode: Socket Exhaustion / Target Site Hanging**
-   - *Cause:* Target URLs respond extremely slowly, keeping connections open and consuming all available sockets/memory on the Node instance.
-   - *Mitigation:* We implemented a strict timeout (`REQUEST_TIMEOUT_MS`) on the Axios client and capped simultaneous outbound connections using `p-limit`.
+1. **Failure Mode: Socket / Connection Exhaustion**
+   - *Cause:* Target URLs respond slowly, causing open HTTP sockets to accumulate.
+   - *Mitigation:* Strict outbound timeout (`REQUEST_TIMEOUT_MS`) + global concurrency gate (`p-limit`).
 
 2. **Failure Mode: Cache Stampede (Thundering Herd)**
-   - *Cause:* A highly popular URL is requested 500 times concurrently exactly when its Redis cache TTL expires. All 500 requests miss the cache and hit the target URL simultaneously.
-   - *Mitigation:* While not fully implemented in this MVP, the mitigation is to implement **Promise Memoization** (deduplication) at the Node level, so 500 concurrent requests for the same URL collapse into a single outbound Axios call.
+   - *Cause:* A popular URL's cache expires right during a burst of 500 concurrent requests, triggering 500 simultaneous outbound calls for the same URL.
+   - *Mitigation:* In production, implement **Promise Memoization** (in-flight deduplication) so concurrent duplicate requests await a single shared outbound request.
 
-3. **Failure Mode: Memory Leaks from Large Payloads**
-   - *Cause:* Auditing URLs that return massive payloads (e.g., a 500MB ISO file instead of HTML).
-   - *Mitigation:* Axios is configured to limit `maxContentLength` (or we would stream the response) and we extract `content-length` headers before downloading the full body where possible.
+3. **Failure Mode: Large Payload Out-Of-Memory (OOM)**
+   - *Cause:* Auditing URLs returning massive files (e.g. video streams, zip files).
+   - *Mitigation:* Enforce `maxContentLength` on Axios requests and inspect `Content-Length` headers to reject oversized payloads before downloading.
 
 ---
 
 ## 📈 Observability & Rollback Plan
 
-### Monitoring & Alerting
-If this were deployed to production, we would monitor:
-- **P99 Response Time:** Alert if the API takes >2s to respond (excluding external fetch time).
-- **Cache Hit Ratio:** Alert if the cache hit ratio drops below 20%, indicating either a TTL misconfiguration or an attack with highly randomized URLs.
-- **HTTP 5xx Error Rate:** Alert if >1% of requests result in internal errors.
-- **Redis Memory Usage:** Alert at 80% capacity to prevent evictions of active keys.
+### Key Metrics to Monitor
+- **P99 Latency:** Alert if internal API processing takes >200ms (excluding target site fetch latency).
+- **Cache Hit Ratio:** Alert if cache hit ratio drops below 20%.
+- **HTTP 5xx Error Rates:** Alert if error rate exceeds 1% of total requests over 5 minutes.
+- **Redis Connection Status:** Alert immediately on Redis disconnection or high memory usage (>80%).
 
 ### Rollback Strategy
-1. **Blue/Green Deployment:** New code is deployed to an inactive environment. Traffic is shifted. If alerts trigger, traffic is immediately routed back to the old environment via the Load Balancer.
-2. **Infrastructure as Code (IaC):** Rollbacks are triggered automatically by the CI/CD pipeline (e.g., GitHub Actions) if health checks fail during the deployment phase.
+1. **Blue/Green Deployment:** Deploy new releases to a secondary target; shift router traffic only after `/health` passes automated smoke tests.
+2. **Automated CI/CD Rollback:** GitHub Actions automatically blocks deployments and rolls back if automated test suites fail during build or integration stages.
 
 ---
 
 ## 🤖 AI Usage Statement
 
-AI (Gemini) was used to accelerate the generation of boilerplate code (Express setup, test skeletons) and to quickly format documentation. However, the architectural design, engineering constraints, concurrency limits, caching strategies, tradeoff analysis, and code reviews were driven and directed entirely by my engineering judgment to meet the precise constraints of this assignment.
+AI (Gemini) was used to accelerate initial boilerplate generation (Express routing, test mocks) and markdown formatting. All architecture design decisions, concurrency strategies, cache key hashing, failure mode analyses, and code refinements were directed, reviewed, and finalized by me.

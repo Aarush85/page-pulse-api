@@ -3,8 +3,11 @@ const app = require('../../src/app');
 const { redisClient } = require('../../src/cache/redis');
 const axios = require('axios');
 
-// Mock Axios
+// Mock dependencies
 jest.mock('axios');
+jest.mock('@scalar/express-api-reference', () => ({
+  apiReference: jest.fn(() => (req, res, next) => res.status(200).send('Scalar Docs Mock')),
+}));
 
 describe('Page Pulse API', () => {
   
