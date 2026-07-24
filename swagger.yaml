@@ -1,0 +1,79 @@
+openapi: 3.0.0
+info:
+  title: Page Pulse API
+  description: A production-grade URL-audit service built for the Digital Heroes Training Task.
+  version: 1.0.0
+servers:
+  - url: /
+    description: Current Server
+paths:
+  /api/audit:
+    post:
+      summary: Perform a URL audit
+      description: Fetches a given URL and returns metadata, performance metrics, and caching status.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - url
+              properties:
+                url:
+                  type: string
+                  format: uri
+                  example: https://example.com
+      responses:
+        '200':
+          description: Audit completed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  originalUrl:
+                    type: string
+                    example: https://example.com
+                  finalUrl:
+                    type: string
+                    example: https://example.com/
+                  statusCode:
+                    type: integer
+                    example: 200
+                  responseTimeMs:
+                    type: integer
+                    example: 145
+                  contentType:
+                    type: string
+                    example: text/html; charset=UTF-8
+                  contentLength:
+                    type: integer
+                    example: 1256
+                  pageTitle:
+                    type: string
+                    example: Example Domain
+                  metaDescription:
+                    type: string
+                    example: An example domain description.
+                  cached:
+                    type: boolean
+                    example: false
+                  timestamp:
+                    type: string
+                    format: date-time
+        '400':
+          description: Bad Request (Validation Error)
+        '429':
+          description: Too Many Requests (Rate Limit Exceeded)
+        '500':
+          description: Internal Server Error
+        '504':
+          description: Gateway Timeout
+  /health:
+    get:
+      summary: System Health Check
+      description: Returns the health status of the API and its dependencies.
+      responses:
+        '200':
+          description: Health status object
