@@ -1,6 +1,6 @@
 const express = require('express');
 const path = require('path');
-const swaggerUi = require('swagger-ui-express');
+const { apiReference } = require('@scalar/express-api-reference');
 const yaml = require('yamljs');
 const requestLogger = require('./middleware/requestLogger');
 const errorHandler = require('./middleware/errorHandler');
@@ -16,9 +16,17 @@ app.use(express.urlencoded({ extended: true }));
 // Request Logger (adds requestId and logs request/response)
 app.use(requestLogger);
 
-// Swagger Documentation
+// Scalar API Documentation
 const swaggerDocument = yaml.load(path.join(__dirname, '../swagger.yaml'));
-app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, { customSiteTitle: 'Page Pulse API Docs' }));
+app.use(
+  '/docs',
+  apiReference({
+    theme: 'default',
+    spec: {
+      content: swaggerDocument,
+    },
+  })
+);
 
 // Routes
 app.use('/', routes);
