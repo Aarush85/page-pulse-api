@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: page-pulse-api
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: NODE_ENV
+        value: production
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: page-pulse-redis
+          property: connectionString
+      - key: CACHE_TTL_SECONDS
+        value: 3600
+      - key: CONCURRENCY_LIMIT
+        value: 50
+      - key: REQUEST_TIMEOUT_MS
+        value: 5000
+      - key: RATE_LIMIT_WINDOW_MS
+        value: 60000
+      - key: RATE_LIMIT_MAX
+        value: 100
+      - key: LOG_LEVEL
+        value: info
+
+  - type: redis
+    name: page-pulse-redis
+    plan: free
+    ipAllowList: []
